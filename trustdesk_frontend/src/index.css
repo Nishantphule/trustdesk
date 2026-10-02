@@ -1,0 +1,74 @@
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-raised: #f0f2f5;
+  --ink: #1a1d24;
+  --muted: #5c6570;
+  --line: #d8dee6;
+  --accent: #3dd6c4;
+  --accent-ink: #0e7c72;
+  --danger: #be123c;
+  --danger-bg: #fff1f2;
+  --caution: #b45309;
+  --caution-bg: #fffbeb;
+  --safe: #15803d;
+  --safe-bg: #f0fdf4;
+  --urgent: #c2410c;
+  --urgent-bg: #fff7ed;
+  --stale: #6d28d9;
+  --stale-bg: #f5f3ff;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-raised: #1f232c;
+  --ink: #e7eaf0;
+  --muted: #9aa3b2;
+  --line: #2c3340;
+  --accent: #3dd6c4;
+  --accent-ink: #3dd6c4;
+  --danger: #fb7185;
+  --danger-bg: #3f1520;
+  --caution: #fbbf24;
+  --caution-bg: #3a2a12;
+  --safe: #4ade80;
+  --safe-bg: #13281c;
+  --urgent: #fb923c;
+  --urgent-bg: #3a2414;
+  --stale: #c4b5fd;
+  --stale-bg: #2a2140;
+  color-scheme: dark;
+}
+
+html, body, #root { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

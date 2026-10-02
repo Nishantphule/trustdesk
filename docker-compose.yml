@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: trustdesk
+      POSTGRES_PASSWORD: trustdesk
+      POSTGRES_DB: trustdesk
+    ports:
+      - "5432:5432"
+    volumes:
+      - trustdesk_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trustdesk -d trustdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  server:
+    build: ./trustdesk_backend
+    environment:
+      DATABASE_URL: postgres://trustdesk:trustdesk@postgres:5432/trustdesk
+      JWT_SECRET: dev-only-change-me
+      LLM_PROVIDER: mock
+      PORT: "4000"
+      SEED_ON_BOOT: "true"
+      DATA_DIR: /app/data
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data:ro
+
+  client:
+    build: ./trustdesk_frontend
+    environment:
+      API_PROXY: http://server:4000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - server
+
+volumes:
+  trustdesk_pg:
