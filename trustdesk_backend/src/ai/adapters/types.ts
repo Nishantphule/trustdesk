@@ -6,12 +6,19 @@ export type DraftInput = {
   body: string;
   prompt: string;
   policyChunks: RetrievedDoc[];
+  lookup?: {
+    confident: boolean;
+    already_refunded: boolean;
+    questions: string[];
+    facts: { kind: string; ref: string; summary: string }[];
+  };
 };
 
 export type DraftOutput = {
   body: string;
   citations: string[];
   escalate: boolean;
+  usedLlm?: boolean;
 };
 
 export interface LLMAdapter {

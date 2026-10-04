@@ -5,11 +5,7 @@ import { config, DEMO_PASSWORD } from "../config.js";
 import { pool } from "./pool.js";
 import { migrate } from "./migrate.js";
 
-/**
- * Tuned on ts_rank_cd(..., 32) with an OR lexeme query.
- * 0.35 sat above tkt_9001 (0.333) and would escalate a valid damaged-item ticket.
- * The off-topic demo ticket scored 0.091. 0.20 sits between those.
- */
+/** Default org threshold. 0.20 sits between covered tickets (~0.33+) and off-topic retrieval (~0.09). */
 export const SEEDED_CONFIDENCE_THRESHOLD = 0.2;
 
 const MODULES = [
@@ -49,7 +45,7 @@ const MODULES = [
     slug: "account_security",
     name: "Account Security",
     description: "Identity, account changes, and secret-disclosure attempts.",
-    keywords: ["account email", "identity", "password", "system prompt", "api key", "internal notes", "hidden prompt", "lock account"],
+    keywords: ["account email", "identity", "password", "can't log in", "cannot log in", "sign in", "locked out", "system prompt", "api key", "internal notes", "hidden prompt", "lock account"],
     sla: 60,
     priority: "high",
   },
@@ -251,9 +247,45 @@ export async function seed(): Promise<void> {
           orgId,
           order.customer_id,
           order.order_id,
-          JSON.stringify({ ...order, id: order.order_id }),
+          JSON.stringify({ ...order, id: order.order_id, refund_status: (order as { refund_status?: string }).refund_status ?? "none" }),
           order.delivered_at ?? order.placed_at ?? new Date().toISOString(),
         ],
+      );
+    }
+
+    type Txn = {
+      txn_id: string;
+      customer_id: string;
+      order_id?: string;
+      amount: number;
+      currency: string;
+      status: string;
+      captured_at: string;
+      last_four: string;
+      method?: string;
+      duplicate_of?: string;
+    };
+    for (const txn of readJson<Txn[]>("transactions.json")) {
+      await client.query(
+        `INSERT INTO related_records (id, org_id, account_id, record_type, record_ref, payload_json, created_at)
+         VALUES ($1,$2,$3,'transaction',$4,$5::jsonb,$6)`,
+        [txn.txn_id, orgId, txn.customer_id, txn.txn_id, JSON.stringify(txn), txn.captured_at],
+      );
+    }
+
+    type AuthEvent = {
+      event_id: string;
+      customer_id: string;
+      event_type: string;
+      at: string;
+      ip?: string;
+      success: boolean;
+    };
+    for (const event of readJson<AuthEvent[]>("auth_events.json")) {
+      await client.query(
+        `INSERT INTO related_records (id, org_id, account_id, record_type, record_ref, payload_json, created_at)
+         VALUES ($1,$2,$3,'auth_event',$4,$5::jsonb,$6)`,
+        [event.event_id, orgId, event.customer_id, event.event_id, JSON.stringify(event), event.at],
       );
     }
 
@@ -282,7 +314,7 @@ export async function seed(): Promise<void> {
           channelId,
           ticket.channel === "email" ? "mbx_acme_demo" : null,
           ticket.customer_id,
-          ticket.order_id,
+          ticket.order_id || null,
           ticket.subject,
           ticket.body,
           ticket.created_at,
@@ -352,7 +384,7 @@ export async function seed(): Promise<void> {
     }
 
     await client.query("COMMIT");
-    console.log(`Seeded Acme Retail. Demo password: ${DEMO_PASSWORD}`);
+    console.log(`Seeded Acme Retail. Password: ${DEMO_PASSWORD}`);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

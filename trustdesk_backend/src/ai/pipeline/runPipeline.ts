@@ -10,6 +10,7 @@ import { applyMailboxPrior } from "./classify.js";
 import { selectTools, type OrderSnapshot } from "../../tools/selectTools.js";
 import { snapshotHash, type PolicyVersion } from "../../tools/snapshotHash.js";
 import { routeEscalation } from "../../channels/escalationRouting.js";
+import { formatLookupBlock, lookupContext } from "../../tickets/lookupContext.js";
 
 type TicketRow = {
   id: string;
@@ -66,6 +67,15 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
   const extraPatterns = await loadExtraPatterns(orgId);
 
   const order = await loadOrder(orgId, ticket.related_record_id);
+  const lookup = await lookupContext({
+    orgId,
+    accountId: ticket.account_id,
+    relatedRecordId: ticket.related_record_id,
+    text,
+    moduleSlug: classification.moduleSlug,
+    ticketCreatedAt: ticket.created_at,
+  });
+  const lookupBlock = formatLookupBlock(lookup);
   const traceId = `run_${randomUUID().slice(0, 8)}`;
 
   if (classification.collision || !classification.moduleSlug) {
@@ -88,7 +98,7 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
       id: traceId,
       orgId,
       ticketId,
-      input: { classification, llm_called: false, mailbox_default_disagreed: prior.mailboxDefaultDisagreed },
+      input: { classification, llm_called: false, mailbox_default_disagreed: prior.mailboxDefaultDisagreed, lookup },
       docIds: [],
       scores: [],
       rule: "escalated",
@@ -123,7 +133,7 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
       id: traceId,
       orgId,
       ticketId,
-      input: { classification, llm_called: false, mailbox_default_disagreed: prior.mailboxDefaultDisagreed },
+      input: { classification, llm_called: false, mailbox_default_disagreed: prior.mailboxDefaultDisagreed, lookup },
       docIds: [],
       scores: [],
       rule: "escalated",
@@ -168,26 +178,41 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
         body: ticket.body_raw,
         prompt: "",
         policyChunks: hits,
+        lookup,
       });
       draftBody = templated.body;
       citations = templated.citations.filter((id) => id !== "KB-ADVERSARIAL-001");
     }
   } else {
-    llmCalled = true;
     const prompt = buildDraftPrompt({
       subject: ticket.subject,
       body: ticket.body_raw,
       policyChunks: hits,
+      lookupBlock,
     });
     const drafted = await adapter.draft({
       subject: ticket.subject,
       body: ticket.body_raw,
       prompt,
       policyChunks: hits,
+      lookup,
     });
+    llmCalled = Boolean(drafted.usedLlm);
     draftBody = drafted.body;
     citations = drafted.citations.filter((id) => id !== "KB-ADVERSARIAL-001");
     escalate = escalate || drafted.escalate;
+    if (draftMissesOutcome(classification.intent, draftBody, lookup)) {
+      const grounded = draftFromContext({
+        subject: ticket.subject,
+        body: ticket.body_raw,
+        prompt: "",
+        policyChunks: hits,
+        lookup,
+      });
+      draftBody = grounded.body;
+      citations = grounded.citations.filter((id) => id !== "KB-ADVERSARIAL-001");
+      llmCalled = false;
+    }
     const post = postCheck(draftBody);
     if (post.blocked || citationsMissing(draftBody, citations)) {
       const safe = draftFromContext({
@@ -195,11 +220,13 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
         body: ticket.body_raw,
         prompt: "",
         policyChunks: hits,
+        lookup,
       });
       draftBody = safe.body;
       citations = safe.citations.filter((id) => id !== "KB-ADVERSARIAL-001");
       ruleResult = "blocked";
       escalate = true;
+      llmCalled = false;
     } else if (post.escalate) {
       ruleResult = "escalated";
       escalate = true;
@@ -218,7 +245,7 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
     `SELECT tool_key FROM module_tool_actions WHERE module_id = $1 AND enabled = true`,
     [module.id],
   );
-  let tools = selectTools({
+  const tools = selectTools({
     text,
     moduleSlug: module.slug,
     enabledTools: enabledRes.rows.map((r) => r.tool_key),
@@ -229,16 +256,8 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
       ? pre
       : { blocked: true, escalate: true, reason: gate.reason, matched: ["confidence_gate"] },
     shouldEscalate: escalate,
+    alreadyRefunded: lookup.already_refunded,
   });
-  if (adapter.recommendTools && gate.pass && !pre.blocked) {
-    try {
-      const suggested = await adapter.recommendTools(text, tools.map((tool) => tool.toolKey));
-      const intersected = tools.filter((tool) => tool.toolKey === "escalate_to_human" || suggested.includes(tool.toolKey));
-      if (suggested.length > 0 && intersected.length > 0) tools = intersected;
-    } catch {
-      // A model failure keeps the tools selectTools already allowed.
-    }
-  }
 
   if (!gate.pass) {
     draftBody = "";
@@ -351,6 +370,7 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
       gate,
       promptWrapped: true,
       mailbox_default_disagreed: prior.mailboxDefaultDisagreed,
+      lookup,
       snippets: hits.map((hit) => ({
         doc_id: hit.doc_id,
         title: hit.title,
@@ -386,6 +406,43 @@ export async function runPipeline(orgId: string, ticketId: string, opts?: { forc
 }
 
 type LoadedOrder = OrderSnapshot & { payment_status?: string | null };
+
+function draftMissesOutcome(
+  intent: string,
+  body: string,
+  lookup?: { confident: boolean; questions: string[] },
+): boolean {
+  if (/<untrusted_context>|the user wants me|customer-facing email|2 to 5 sentences|LOOKUP FACTS|allowed_questions:/i.test(body)) {
+    return true;
+  }
+  if (lookup && !lookup.confident && lookup.questions.length > 0) {
+    if (/lookup is not confident|allowed_questions/i.test(body)) return true;
+    const asked = lookup.questions.some((question) => body.toLowerCase().includes(question.toLowerCase()));
+    if (!asked) return true;
+  }
+  switch (intent) {
+    case "final_sale_refund":
+      return !/final[- ]sale|can'?t refund|cannot refund|not eligible/i.test(body);
+    case "stale_tracking":
+      return !/carrier investigation/i.test(body);
+    case "duplicate_charge":
+      return !/billing review|billing investigation/i.test(body);
+    case "damaged_item":
+      return !/photo|replacement|refund review/i.test(body);
+    case "login_issue":
+      return /here is (your )?password|\bnew password is\b|escalat/i.test(body);
+    case "safety_hazard":
+      return !/safety/i.test(body) || !/specialist|escalat/i.test(body) || /please troubleshoot/i.test(body);
+    case "secret_exfiltration":
+      return !/can'?t share|will not reveal|won't share/i.test(body);
+    case "account_change_bypass":
+      return !/identity check|verification/i.test(body) || !/can'?t change|won't change|will not change/i.test(body);
+    case "prompt_injection":
+      return !/coupon/i.test(body) || !/didn'?t create|no coupon|not something I can do/i.test(body);
+    default:
+      return false;
+  }
+}
 
 async function settleEscalation(orgId: string, ticketId: string) {
   try {

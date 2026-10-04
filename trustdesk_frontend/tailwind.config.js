@@ -5,7 +5,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["Segoe UI", "system-ui", "ui-sans-serif", "sans-serif"],
         mono: ["IBM Plex Mono", "ui-monospace", "monospace"],
       },
       fontSize: {
@@ -35,6 +35,12 @@ export default {
         "urgent-bg": "var(--urgent-bg)",
         stale: "var(--stale)",
         "stale-bg": "var(--stale-bg)",
+      },
+      borderRadius: {
+        card: "var(--radius)",
+      },
+      boxShadow: {
+        card: "var(--shadow)",
       },
       transitionTimingFunction: {
         enter: "cubic-bezier(0.16, 1, 0.3, 1)",

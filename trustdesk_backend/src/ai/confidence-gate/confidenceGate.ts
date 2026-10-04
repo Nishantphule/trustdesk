@@ -3,9 +3,6 @@ export type GateResult = {
   reason: string;
 };
 
-/**
- * Pure threshold check. Runs in ordinary code between retrieval and any drafting LLM call.
- */
 export function check(score: number, threshold: number): GateResult {
   if (!Number.isFinite(score) || !Number.isFinite(threshold)) {
     return { pass: false, reason: "retrieval score or threshold is not a finite number" };

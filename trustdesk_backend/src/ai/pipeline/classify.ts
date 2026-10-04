@@ -65,6 +65,15 @@ export function triageMeta(text: string): Pick<Classified, "intent" | "priority"
       reason: "Message tries to override support policy.",
     };
   }
+  if (/can'?t log ?in|cannot log ?in|can'?t sign in|locked out|password reset/i.test(text)) {
+    return {
+      intent: "login_issue",
+      priority: "high",
+      sentiment: "frustrated",
+      shouldEscalate: false,
+      reason: "Login issue. Verification path only. Do not collect a password or change the account email.",
+    };
+  }
   if (/double charge|two charges|charged twice/i.test(text)) {
     return {
       intent: "duplicate_charge",

@@ -1,0 +1,26 @@
+[
+  {
+    "event_id": "auth_9102_fail_1",
+    "customer_id": "cus_9102",
+    "event_type": "login_failure",
+    "at": "2026-09-29T07:48:00+05:30",
+    "ip": "203.0.113.14",
+    "success": false
+  },
+  {
+    "event_id": "auth_9102_fail_2",
+    "customer_id": "cus_9102",
+    "event_type": "login_failure",
+    "at": "2026-09-29T07:49:00+05:30",
+    "ip": "203.0.113.14",
+    "success": false
+  },
+  {
+    "event_id": "auth_9102_ok",
+    "customer_id": "cus_9102",
+    "event_type": "login_success",
+    "at": "2026-09-28T21:10:00+05:30",
+    "ip": "203.0.113.14",
+    "success": true
+  }
+]

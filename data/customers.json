@@ -58,6 +58,46 @@
     "created_at": "2024-12-05",
     "verified": true,
     "tags": []
+  },
+  {
+    "customer_id": "cus_9101",
+    "name": "Priya Nair",
+    "email": "priya.nair@example.com",
+    "tier": "standard",
+    "country": "IN",
+    "created_at": "2025-11-04",
+    "verified": true,
+    "tags": []
+  },
+  {
+    "customer_id": "cus_9102",
+    "name": "Arjun Desai",
+    "email": "arjun.desai@example.com",
+    "tier": "silver",
+    "country": "IN",
+    "created_at": "2025-03-18",
+    "verified": true,
+    "tags": []
+  },
+  {
+    "customer_id": "cus_9103",
+    "name": "Meera Iyer",
+    "email": "meera.iyer@example.com",
+    "tier": "gold",
+    "country": "IN",
+    "created_at": "2024-08-09",
+    "verified": true,
+    "tags": ["loyal_customer"]
+  },
+  {
+    "customer_id": "cus_9104",
+    "name": "Kabir Shah",
+    "email": "kabir.shah@example.com",
+    "tier": "standard",
+    "country": "IN",
+    "created_at": "2026-01-12",
+    "verified": true,
+    "tags": []
   }
 ]
 

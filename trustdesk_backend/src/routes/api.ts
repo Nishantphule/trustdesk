@@ -13,6 +13,8 @@ import type { PolicyVersion } from "../tools/snapshotHash.js";
 import { registerGmailAuthedRoutes, registerGmailPublicRoutes } from "../channels/gmailRoutes.js";
 import { assertMailboxOwner, listPublicMailboxes, publicMailbox } from "../channels/mailboxOwner.js";
 import { routeEscalation } from "../channels/escalationRouting.js";
+import { decorateTicket, groupBoard } from "../tickets/nextAction.js";
+import { lookupContext } from "../tickets/lookupContext.js";
 
 export const api = Router();
 
@@ -692,7 +694,8 @@ api.get(
     const rows = await query(
       `SELECT t.*, m.slug AS module_slug, m.name AS module_name, c.type AS channel_type,
               a.name AS account_name, a.email AS account_email,
-              em.address AS escalation_address, em.owner_id AS escalation_owner_id, em.owner_type AS escalation_owner_type
+              em.address AS escalation_address, em.owner_id AS escalation_owner_id, em.owner_type AS escalation_owner_type,
+              (SELECT count(*) FROM tool_actions ta WHERE ta.ticket_id = t.id AND ta.org_id = t.org_id AND ta.status = 'proposed') AS proposed_tools
        FROM tickets t
        LEFT JOIN modules m ON m.id = t.module_id AND m.org_id = t.org_id
        LEFT JOIN channels c ON c.id = t.channel_id AND c.org_id = t.org_id
@@ -705,7 +708,12 @@ api.get(
        END, t.created_at DESC`,
       params,
     );
-    res.json(rows.rows);
+    const decorated = rows.rows.map((row) => decorateTicket(row as { status: string; proposed_tools?: number | string }));
+    if (req.query.board === "1") {
+      res.json(groupBoard(decorated));
+      return;
+    }
+    res.json(decorated);
   }),
 );
 
@@ -742,14 +750,75 @@ api.get(
       ),
       query("SELECT * FROM traces WHERE ticket_id = $1 AND org_id = $2 ORDER BY created_at DESC", [req.params.id, orgId]),
     ]);
+    const ticketRow = ticket.rows[0] as {
+      status: string;
+      module_slug?: string | null;
+      priority?: string | null;
+      subject?: string;
+      body_raw?: string;
+      created_at?: string;
+      account_id?: string | null;
+      related_record_id?: string | null;
+    };
+    const lookup = await lookupContext({
+      orgId,
+      accountId: ticketRow.account_id,
+      relatedRecordId: ticketRow.related_record_id,
+      text: `${ticketRow.subject ?? ""}\n${ticketRow.body_raw ?? ""}`,
+      moduleSlug: ticketRow.module_slug ?? null,
+      ticketCreatedAt: ticketRow.created_at ?? new Date().toISOString(),
+    });
+    const proposed = tools.rows.filter((row) => row.status === "proposed").length;
+    const decorated = decorateTicket({ status: ticketRow.status, proposed_tools: proposed });
+    const latest = traces.rows[0] as
+      | {
+          confidence_gate_result?: string;
+          rule_layer_result?: string;
+          llm_called?: boolean;
+          retrieved_doc_ids?: string[];
+          retrieval_scores?: number[];
+          recommended_actions?: string[] | string;
+          input_json?: {
+            gate?: { reason?: string };
+            pre?: { matched?: string[] };
+            snippets?: { doc_id: string; title: string; snippet: string; score: number }[];
+          };
+        }
+      | undefined;
+    const draft = drafts.rows[0] as { citation_doc_ids?: string[] } | undefined;
+    const docs = Array.isArray(latest?.retrieved_doc_ids) ? latest.retrieved_doc_ids : [];
+    const scores = Array.isArray(latest?.retrieval_scores) ? latest.retrieval_scores : [];
+    const recommended = Array.isArray(latest?.recommended_actions)
+      ? latest.recommended_actions
+      : latest?.recommended_actions
+        ? [latest.recommended_actions]
+        : [];
     res.json({
       ...ticket.rows[0],
+      next_action: decorated.next_action,
+      board_column: decorated.board_column,
       account: account.rows[0] ?? null,
       related_record: related.rows[0] ?? null,
+      records: lookup.records,
+      lookup,
       messages: messages.rows,
       drafts: drafts.rows,
       tool_actions: tools.rows,
       traces: traces.rows,
+      decision: latest
+        ? {
+            module: ticketRow.module_slug ?? null,
+            priority: ticketRow.priority ?? null,
+            gate: { result: latest.confidence_gate_result ?? null, reason: latest.input_json?.gate?.reason ?? null },
+            rules: { result: latest.rule_layer_result ?? null, matched: latest.input_json?.pre?.matched ?? [] },
+            retrieved: docs.map((docId, index) => ({ doc_id: docId, score: scores[index] ?? null })),
+            llm_called: Boolean(latest.llm_called),
+            citations: draft?.citation_doc_ids ?? [],
+            recommended_actions: recommended,
+            next_action: decorated.next_action,
+            lookup,
+          }
+        : null,
     });
   }),
 );
@@ -788,6 +857,8 @@ api.patch(
           [req.params.id, orgId],
         );
     if (!draft.rows[0]) throw new HttpError(404, "Draft not found", "NOT_FOUND");
+    const existing = await query<{ status: string }>("SELECT status FROM drafts WHERE id = $1", [(draft.rows[0] as { id: string }).id]);
+    if (existing.rows[0]?.status === "sent") throw new HttpError(400, "This reply was already sent.", "VALIDATION");
     const updated = await query(
       `UPDATE drafts SET body = $2, status = 'edited' WHERE id = $1 RETURNING *`,
       [(draft.rows[0] as { id: string }).id, body.body],
@@ -800,6 +871,19 @@ api.post(
   "/tickets/:id/draft/approve",
   asyncHandler(async (req, res) => {
     const user = (req as AuthedRequest).user;
+    const current = await query<{ status: string }>("SELECT status FROM tickets WHERE id = $1 AND org_id = $2", [
+      req.params.id,
+      user.orgId,
+    ]);
+    if (!current.rows[0]) throw new HttpError(404, "Ticket not found", "NOT_FOUND");
+    if (current.rows[0].status === "escalated") {
+      throw new HttpError(400, "Escalated tickets cannot have a draft approved. Handle the escalation.", "VALIDATION");
+    }
+    const latest = await query<{ status: string }>(
+      "SELECT status FROM drafts WHERE ticket_id = $1 AND org_id = $2 ORDER BY created_at DESC LIMIT 1",
+      [req.params.id, user.orgId],
+    );
+    if (latest.rows[0]?.status === "sent") throw new HttpError(400, "This reply was already sent.", "VALIDATION");
     const updated = await query(
       `UPDATE drafts SET status = 'approved', reviewed_by = $3
        WHERE id = (
@@ -820,6 +904,11 @@ api.post(
   "/tickets/:id/draft/reject",
   asyncHandler(async (req, res) => {
     const user = (req as AuthedRequest).user;
+    const latest = await query<{ status: string }>(
+      "SELECT status FROM drafts WHERE ticket_id = $1 AND org_id = $2 ORDER BY created_at DESC LIMIT 1",
+      [req.params.id, user.orgId],
+    );
+    if (latest.rows[0]?.status === "sent") throw new HttpError(400, "This reply was already sent.", "VALIDATION");
     const updated = await query(
       `UPDATE drafts SET status = 'rejected', reviewed_by = $3
        WHERE id = (
@@ -841,6 +930,13 @@ api.post(
       [req.params.id, user.orgId],
     );
     if (!draft.rows[0]) throw new HttpError(404, "Draft not found", "NOT_FOUND");
+    const ticketStatus = await query<{ status: string }>("SELECT status FROM tickets WHERE id = $1 AND org_id = $2", [
+      req.params.id,
+      user.orgId,
+    ]);
+    if (ticketStatus.rows[0]?.status === "escalated") {
+      throw new HttpError(400, "Escalated tickets cannot be sent from the draft. Handle the escalation.", "VALIDATION");
+    }
     if (draft.rows[0].status !== "approved" && draft.rows[0].status !== "edited") {
       throw new HttpError(400, "Approve the draft before sending. Auto-send is off.", "VALIDATION");
     }
@@ -859,6 +955,15 @@ api.post(
       [`msg_${randomUUID().slice(0, 8)}`, user.orgId, req.params.id, `${draft.rows[0].body}${signature}`],
     );
     await query(`UPDATE drafts SET status = 'sent' WHERE id = $1`, [draft.rows[0].id]);
+    const openTools = await openToolCount(user.orgId, req.params.id);
+    if (openTools > 0) {
+      await query(`UPDATE tickets SET status = 'pending_approval', updated_at = now() WHERE id = $1 AND org_id = $2`, [
+        req.params.id,
+        user.orgId,
+      ]);
+      res.json({ ticket_id: req.params.id, status: "pending_approval", sent: true });
+      return;
+    }
     await query(`UPDATE tickets SET status = 'sent', updated_at = now() WHERE id = $1 AND org_id = $2`, [
       req.params.id,
       user.orgId,
@@ -1025,6 +1130,31 @@ api.post(
   }),
 );
 
+const OPEN_TOOL_STATUSES = ["proposed", "pending_approval", "approved", "stale_blocked"];
+
+async function openToolCount(orgId: string, ticketId: string): Promise<number> {
+  const rows = await query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM tool_actions
+     WHERE org_id = $1 AND ticket_id = $2 AND status = ANY($3::text[])`,
+    [orgId, ticketId, OPEN_TOOL_STATUSES],
+  );
+  return Number(rows.rows[0]?.count ?? 0);
+}
+
+async function closeTicketIfReplySent(orgId: string, ticketId: string) {
+  if ((await openToolCount(orgId, ticketId)) > 0) return;
+  const draft = await query<{ status: string }>(
+    `SELECT status FROM drafts WHERE ticket_id = $1 AND org_id = $2 ORDER BY created_at DESC LIMIT 1`,
+    [ticketId, orgId],
+  );
+  if (draft.rows[0]?.status !== "sent") return;
+  await query(
+    `UPDATE tickets SET status = 'closed', updated_at = now()
+     WHERE id = $1 AND org_id = $2 AND status <> 'escalated'`,
+    [ticketId, orgId],
+  );
+}
+
 async function loadAction(orgId: string, id: string) {
   const row = await query<{
     id: string;
@@ -1093,6 +1223,7 @@ api.post(
        WHERE id = $1 AND org_id = $2 RETURNING *`,
       [action.id, user.orgId, user.userId],
     );
+    await closeTicketIfReplySent(user.orgId, action.ticket_id);
     res.json(updated.rows[0]);
   }),
 );
@@ -1139,6 +1270,7 @@ api.post(
         JSON.stringify({ ok: true, tool_key: action.tool_key, note: "Simulated execution. No payment or carrier system was called." }),
       ],
     );
+    await closeTicketIfReplySent(user.orgId, action.ticket_id);
     res.json(updated.rows[0]);
   }),
 );

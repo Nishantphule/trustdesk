@@ -53,7 +53,6 @@ type AdminState = {
   loadTraces: () => Promise<void>;
   rules: Rules | null;
   refresh: () => Promise<void>;
-  connectGmail: (ownerType: string, ownerId?: string) => Promise<void>;
 };
 
 const AdminContext = createContext<AdminState | null>(null);
@@ -69,9 +68,8 @@ const tabs = ["org", "modules", "policies", "mailboxes", "tools", "rules", "peop
 export function AdminRedirect() {
   const [params] = useSearchParams();
   const tab = params.get("tab");
-  const gmail = params.get("gmail");
   const dest = tab && tabs.includes(tab) ? `/admin/${tab}` : "/admin/org";
-  return <Navigate to={gmail ? `${dest}?gmail=${gmail}` : dest} replace />;
+  return <Navigate to={dest} replace />;
 }
 
 export function AdminProvider() {
@@ -106,6 +104,7 @@ export function AdminProvider() {
     setUsers(userRows);
     setRules(ruleRow);
     setModuleId((current) => current || moduleRows[0]?.id || "");
+    setError("");
   }
 
   useEffect(() => {
@@ -120,13 +119,6 @@ export function AdminProvider() {
   const loadTraces = useCallback(async () => {
     setTraces(await api<TraceRow[]>("/traces"));
   }, []);
-
-  async function connectGmail(ownerType: string, ownerId?: string) {
-    const params = new URLSearchParams({ ownerType, mode: "json" });
-    if (ownerId) params.set("ownerId", ownerId);
-    const result = await api<{ authorization_url: string }>(`/mailboxes/oauth/start?${params}`);
-    window.location.href = result.authorization_url;
-  }
 
   const value: AdminState = {
     readOnly: me?.role !== "admin",
@@ -146,7 +138,6 @@ export function AdminProvider() {
     loadTraces,
     rules,
     refresh,
-    connectGmail,
   };
 
   return (

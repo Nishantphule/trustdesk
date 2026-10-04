@@ -26,6 +26,7 @@ export function selectTools(input: {
   order: OrderSnapshot | null;
   pre: RuleResult;
   shouldEscalate: boolean;
+  alreadyRefunded?: boolean;
 }): ToolProposal[] {
   const enabled = new Set(input.enabledTools);
   const proposals: ToolProposal[] = [];
@@ -77,7 +78,7 @@ export function selectTools(input: {
     });
   }
 
-  if (input.moduleSlug === "billing" && order && allow("start_refund_review")) {
+  if (input.moduleSlug === "billing" && order && allow("start_refund_review") && !input.alreadyRefunded) {
     proposals.push({
       toolKey: "start_refund_review",
       reason: "Duplicate charge with a single order. Start a billing review without promising an immediate refund.",
@@ -89,7 +90,7 @@ export function selectTools(input: {
     });
   }
 
-  if (input.moduleSlug === "refund" && order) {
+  if (input.moduleSlug === "refund" && order && !input.alreadyRefunded) {
     const finalSale =
       order.items.some((item) => item.final_sale || item.category === "software") ||
       /software license|final[- ]sale/i.test(text);

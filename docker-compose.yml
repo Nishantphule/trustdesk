@@ -17,10 +17,10 @@ services:
 
   server:
     build: ./trustdesk_backend
+    env_file:
+      - ./trustdesk_backend/.env
     environment:
       DATABASE_URL: postgres://trustdesk:trustdesk@postgres:5432/trustdesk
-      JWT_SECRET: dev-only-change-me
-      LLM_PROVIDER: mock
       PORT: "4000"
       SEED_ON_BOOT: "true"
       DATA_DIR: /app/data

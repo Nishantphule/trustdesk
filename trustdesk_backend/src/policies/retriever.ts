@@ -10,11 +10,6 @@ export type SearchHit = {
   module_id: string | null;
 };
 
-/**
- * Postgres full-text retriever.
- * A later PgVectorRetriever can implement this same function shape without changing callers.
- * Vector/hybrid search stays out of scope until the FTS threshold is tuned.
- */
 export async function searchPolicies(
   orgId: string,
   moduleId: string | null,

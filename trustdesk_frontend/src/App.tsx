@@ -26,7 +26,22 @@ function Guard() {
 function Toasts() {
   const { theme } = useTheme();
   const mode = theme === "system" ? (document.documentElement.classList.contains("dark") ? "dark" : "light") : theme;
-  return <Toaster theme={mode} position="top-center" />;
+  return (
+    <Toaster
+      theme={mode}
+      position="top-center"
+      toastOptions={{
+        classNames: {
+          toast: "rounded-card border border-line bg-surface text-ink shadow-card",
+          title: "text-sm font-medium text-ink",
+          description: "text-sm text-muted",
+          success: "border-safe bg-safe-bg text-safe",
+          warning: "border-caution bg-caution-bg text-caution",
+          error: "border-danger bg-danger-bg text-danger",
+        },
+      }}
+    />
+  );
 }
 
 export function App() {

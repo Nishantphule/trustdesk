@@ -62,7 +62,9 @@ export class HttpLLMAdapter implements LLMAdapter {
       if (!match) return keyword;
       const parsed = JSON.parse(match[0]) as { moduleSlug?: string | null };
       if (parsed.moduleSlug && modules.some((m) => m.slug === parsed.moduleSlug)) {
-        return { ...keyword, moduleSlug: parsed.moduleSlug, reason: `${keyword.reason} LLM selected ${parsed.moduleSlug}.` };
+        if (!keyword.moduleSlug || keyword.moduleSlug === "general") {
+          return { ...keyword, moduleSlug: parsed.moduleSlug, reason: `${keyword.reason} LLM selected ${parsed.moduleSlug}.` };
+        }
       }
       return keyword;
     } catch {
@@ -74,11 +76,10 @@ export class HttpLLMAdapter implements LLMAdapter {
     const safe = await fallback.draft(input);
     try {
       const raw = await complete(input.prompt);
-      if (!raw) return safe;
-      const citations = safe.citations.filter((id) => raw.includes(id) || safe.citations.includes(id));
-      return { body: raw, citations: citations.length ? safe.citations : safe.citations, escalate: safe.escalate };
+      if (!raw) return { ...safe, usedLlm: false };
+      return { body: raw, citations: safe.citations, escalate: safe.escalate, usedLlm: true };
     } catch {
-      return safe;
+      return { ...safe, usedLlm: false };
     }
   }
 }
