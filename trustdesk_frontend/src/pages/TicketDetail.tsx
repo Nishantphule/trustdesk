@@ -397,8 +397,8 @@ function DraftPanel({ ticket, draft, trace, draftText, setDraftText, busy, busyA
             })}
             <Badge>{draft.status}</Badge>
           </div>
-          <Textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} aria-label="Draft reply" disabled={ticket.status === "closed" || ticket.status === "sent"} />
-          {ticket.status !== "closed" && ticket.status !== "sent" && (
+          <Textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} aria-label="Draft reply" disabled={ticket.status === "closed" || ticket.status === "sent" || draft.status === "sent"} />
+          {ticket.status !== "closed" && ticket.status !== "sent" && draft.status !== "sent" && (
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" disabled={busy} onClick={() => void act(`/tickets/${ticket.id}/draft`, "Draft edit saved", "Saving…", { body: draftText, draft_id: draft.id }, "PATCH")}>Save edit</Button>
             {next !== "review_draft" && (

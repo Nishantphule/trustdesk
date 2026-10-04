@@ -857,6 +857,8 @@ api.patch(
           [req.params.id, orgId],
         );
     if (!draft.rows[0]) throw new HttpError(404, "Draft not found", "NOT_FOUND");
+    const existing = await query<{ status: string }>("SELECT status FROM drafts WHERE id = $1", [(draft.rows[0] as { id: string }).id]);
+    if (existing.rows[0]?.status === "sent") throw new HttpError(400, "This reply was already sent.", "VALIDATION");
     const updated = await query(
       `UPDATE drafts SET body = $2, status = 'edited' WHERE id = $1 RETURNING *`,
       [(draft.rows[0] as { id: string }).id, body.body],
@@ -877,6 +879,11 @@ api.post(
     if (current.rows[0].status === "escalated") {
       throw new HttpError(400, "Escalated tickets cannot have a draft approved. Handle the escalation.", "VALIDATION");
     }
+    const latest = await query<{ status: string }>(
+      "SELECT status FROM drafts WHERE ticket_id = $1 AND org_id = $2 ORDER BY created_at DESC LIMIT 1",
+      [req.params.id, user.orgId],
+    );
+    if (latest.rows[0]?.status === "sent") throw new HttpError(400, "This reply was already sent.", "VALIDATION");
     const updated = await query(
       `UPDATE drafts SET status = 'approved', reviewed_by = $3
        WHERE id = (
@@ -897,6 +904,11 @@ api.post(
   "/tickets/:id/draft/reject",
   asyncHandler(async (req, res) => {
     const user = (req as AuthedRequest).user;
+    const latest = await query<{ status: string }>(
+      "SELECT status FROM drafts WHERE ticket_id = $1 AND org_id = $2 ORDER BY created_at DESC LIMIT 1",
+      [req.params.id, user.orgId],
+    );
+    if (latest.rows[0]?.status === "sent") throw new HttpError(400, "This reply was already sent.", "VALIDATION");
     const updated = await query(
       `UPDATE drafts SET status = 'rejected', reviewed_by = $3
        WHERE id = (
@@ -943,6 +955,15 @@ api.post(
       [`msg_${randomUUID().slice(0, 8)}`, user.orgId, req.params.id, `${draft.rows[0].body}${signature}`],
     );
     await query(`UPDATE drafts SET status = 'sent' WHERE id = $1`, [draft.rows[0].id]);
+    const openTools = await openToolCount(user.orgId, req.params.id);
+    if (openTools > 0) {
+      await query(`UPDATE tickets SET status = 'pending_approval', updated_at = now() WHERE id = $1 AND org_id = $2`, [
+        req.params.id,
+        user.orgId,
+      ]);
+      res.json({ ticket_id: req.params.id, status: "pending_approval", sent: true });
+      return;
+    }
     await query(`UPDATE tickets SET status = 'sent', updated_at = now() WHERE id = $1 AND org_id = $2`, [
       req.params.id,
       user.orgId,
@@ -1109,6 +1130,31 @@ api.post(
   }),
 );
 
+const OPEN_TOOL_STATUSES = ["proposed", "pending_approval", "approved", "stale_blocked"];
+
+async function openToolCount(orgId: string, ticketId: string): Promise<number> {
+  const rows = await query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM tool_actions
+     WHERE org_id = $1 AND ticket_id = $2 AND status = ANY($3::text[])`,
+    [orgId, ticketId, OPEN_TOOL_STATUSES],
+  );
+  return Number(rows.rows[0]?.count ?? 0);
+}
+
+async function closeTicketIfReplySent(orgId: string, ticketId: string) {
+  if ((await openToolCount(orgId, ticketId)) > 0) return;
+  const draft = await query<{ status: string }>(
+    `SELECT status FROM drafts WHERE ticket_id = $1 AND org_id = $2 ORDER BY created_at DESC LIMIT 1`,
+    [ticketId, orgId],
+  );
+  if (draft.rows[0]?.status !== "sent") return;
+  await query(
+    `UPDATE tickets SET status = 'closed', updated_at = now()
+     WHERE id = $1 AND org_id = $2 AND status <> 'escalated'`,
+    [ticketId, orgId],
+  );
+}
+
 async function loadAction(orgId: string, id: string) {
   const row = await query<{
     id: string;
@@ -1177,6 +1223,7 @@ api.post(
        WHERE id = $1 AND org_id = $2 RETURNING *`,
       [action.id, user.orgId, user.userId],
     );
+    await closeTicketIfReplySent(user.orgId, action.ticket_id);
     res.json(updated.rows[0]);
   }),
 );
@@ -1223,6 +1270,7 @@ api.post(
         JSON.stringify({ ok: true, tool_key: action.tool_key, note: "Simulated execution. No payment or carrier system was called." }),
       ],
     );
+    await closeTicketIfReplySent(user.orgId, action.ticket_id);
     res.json(updated.rows[0]);
   }),
 );
