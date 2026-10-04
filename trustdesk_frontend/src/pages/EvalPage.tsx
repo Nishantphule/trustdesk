@@ -1,9 +1,28 @@
 import { useState } from "react";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Link } from "react-router-dom";
 import { api } from "@/api";
 import { Badge, Mono } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, PageHeader } from "@/components/ui/layout";
 import { EmptyState, ErrorNote } from "@/components/ui/states";
+
+type Expected = {
+  category: string;
+  priority: string;
+  must_cite_doc_ids?: string[];
+  allowed_actions?: string[];
+  disallowed_actions?: string[];
+  should_escalate: boolean;
+};
+
+type Actual = {
+  category: string | null;
+  priority: string;
+  citations: string[];
+  recommended_actions: string[];
+  should_escalate: boolean;
+  llm_called: boolean;
+};
 
 type EvalResponse = {
   eval_run_id: string;
@@ -11,13 +30,20 @@ type EvalResponse = {
   results: {
     case_id: string;
     ticket_id: string;
+    input: string;
+    expected: Expected;
+    actual: Actual;
     passed: boolean;
     notes: string;
-    actual: { category: string | null; priority: string; citations: string[]; recommended_actions: string[]; should_escalate: boolean; llm_called: boolean };
+    categoryOk?: boolean;
+    citesOk?: boolean;
+    unsafeOk?: boolean;
+    allowedOk?: boolean;
+    escalationOk?: boolean;
   }[];
 };
 
-const metrics = ["triage_accuracy", "citation_coverage", "unsafe_action_block_rate", "allowed_action_recall", "escalation_accuracy", "confidence_gate_hit_rate"];
+const rates = ["triage_accuracy", "citation_coverage", "unsafe_action_block_rate", "allowed_action_recall", "escalation_accuracy", "confidence_gate_hit_rate"];
 
 export function EvalPage() {
   const [report, setReport] = useState<EvalResponse | null>(null);
@@ -37,60 +63,54 @@ export function EvalPage() {
   }
 
   const summary = report?.summary ?? {};
-  const chart = metrics.map((key) => ({
-    name: key.replaceAll("_", " "),
-    rate: typeof summary[key] === "number" ? Math.round(Number(summary[key]) * 100) : 0,
-  }));
 
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Evaluation</h1>
-        <Button disabled={busy} onClick={() => void run()}>{busy ? "Running..." : "Run eval_cases.jsonl"}</Button>
-      </div>
-      <p className="text-sm text-muted">The runner uses the deterministic mock adapter so scores do not depend on a network model. Expected labels are read only here.</p>
+      <PageHeader
+        title="Score the 8 known customer cases"
+        detail="Same pipeline as the queue. Expected labels stay in the eval file, not on tickets."
+        action={<Button disabled={busy} onClick={() => void run()}>{busy ? "Scoring..." : "Run the 8 cases"}</Button>}
+      />
       <ErrorNote message={error} />
-      {!report && <EmptyState title="No eval report yet" detail="Run eval_cases.jsonl to score triage, citations, blocked actions, and the confidence gate." />}
+      {!report && <EmptyState title="No score yet" detail="Run the 8 cases to see input, expected, actual, and pass or fail." />}
       {report && (
         <>
-          <div className="h-64 rounded-md border border-line bg-surface p-3">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chart} margin={{ left: 0, right: 8, top: 8, bottom: 32 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-25} textAnchor="end" height={60} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(value) => [`${value}%`, "Rate"]} />
-                <Bar dataKey="rate" fill="var(--accent-ink)" radius={2} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="flex flex-wrap gap-2">
+            {rates.map((key) => (
+              <Badge key={key} tone="neutral">
+                {key.replaceAll("_", " ")} {typeof summary[key] === "number" ? `${Math.round(Number(summary[key]) * 100)}%` : "—"}
+              </Badge>
+            ))}
           </div>
-          <div className="hidden md:block">
-            <table className="w-full text-sm">
-              <thead className="text-left text-muted"><tr><th className="py-2">Case</th><th>Ticket</th><th>Result</th><th>Category</th><th>Citations</th><th>Actions</th><th>Notes</th></tr></thead>
-              <tbody>
-                {report.results.map((row) => (
-                  <tr key={row.case_id} className="border-t border-line">
-                    <td className="py-2"><Mono>{row.case_id}</Mono></td>
-                    <td><Mono>{row.ticket_id}</Mono></td>
-                    <td><Badge tone={row.passed ? "safe" : "danger"}>{row.passed ? "pass" : "fail"}</Badge></td>
-                    <td>{row.actual.category} / {row.actual.priority}</td>
-                    <td>{row.actual.citations.join(", ")}</td>
-                    <td>{row.actual.recommended_actions.join(", ")}</td>
-                    <td>{row.notes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="grid gap-3 md:hidden">
+          <div className="grid gap-3">
             {report.results.map((row) => (
-              <article key={row.case_id} className="grid gap-1 rounded-md border border-line bg-surface p-3 text-sm">
-                <div className="flex items-center justify-between"><Mono>{row.case_id}</Mono><Badge tone={row.passed ? "safe" : "danger"}>{row.passed ? "pass" : "fail"}</Badge></div>
-                <Mono>{row.ticket_id}</Mono>
-                <p>{row.actual.category} / {row.actual.priority}</p>
-                <p>Citations: {row.actual.citations.join(", ") || "none"}</p>
-                <p>Actions: {row.actual.recommended_actions.join(", ") || "none"}</p>
-                <p className="text-muted">{row.notes}</p>
-              </article>
+              <Card key={row.case_id} className="grid gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Mono>{row.case_id}</Mono>
+                    <Badge tone={row.passed ? "safe" : "danger"}>{row.passed ? "pass" : "fail"}</Badge>
+                  </div>
+                  <Link className="min-h-11 text-sm font-medium" to={`/tickets/${row.ticket_id}`}>{row.ticket_id}</Link>
+                </div>
+                <p className="text-sm"><span className="text-muted">Input </span>{row.input ?? "—"}</p>
+                <p className="text-sm">
+                  <span className="text-muted">Expected </span>
+                  {row.expected?.category ?? "—"} / {row.expected?.priority ?? "—"}
+                  {row.expected?.should_escalate ? " · escalate" : " · no escalate"}
+                  {row.expected?.must_cite_doc_ids?.length ? ` · cite ${row.expected.must_cite_doc_ids.join(", ")}` : ""}
+                  {row.expected?.allowed_actions?.length ? ` · allow ${row.expected.allowed_actions.join(", ")}` : ""}
+                  {row.expected?.disallowed_actions?.length ? ` · block ${row.expected.disallowed_actions.join(", ")}` : ""}
+                </p>
+                <p className="text-sm">
+                  <span className="text-muted">Actual </span>
+                  {row.actual?.category ?? "—"} / {row.actual?.priority ?? "—"}
+                  {row.actual?.should_escalate ? " · escalate" : " · no escalate"}
+                  {row.actual?.citations?.length ? ` · ${row.actual.citations.join(", ")}` : " · no citations"}
+                  {row.actual?.recommended_actions?.length ? ` · ${row.actual.recommended_actions.join(", ")}` : " · no tools"}
+                  {` · ${row.actual?.llm_called ? "model called" : "model not called"}`}
+                </p>
+                {row.notes && <p className="text-sm text-muted">{row.notes}</p>}
+              </Card>
             ))}
           </div>
         </>

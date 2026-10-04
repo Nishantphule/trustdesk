@@ -1,14 +1,17 @@
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import { Bot, Lock, ShieldAlert, UserRound } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, currentUser } from "@/api";
 import { Badge, Mono } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/field";
-import { InfoPopover, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/overlays";
+import { InfoPopover } from "@/components/ui/overlays";
+import { Card, PageHeader } from "@/components/ui/layout";
 import { EmptyState, ErrorNote } from "@/components/ui/states";
+
+type NextAction = "triage" | "review_draft" | "approve_tool" | "send" | "handle_escalation" | "done";
 
 type Draft = {
   id: string;
@@ -44,8 +47,29 @@ type Trace = {
     gate?: { reason?: string };
     pre?: { reason?: string; matched?: string[] };
     snippets?: { doc_id: string; title: string; snippet: string; score: number }[];
-    mailbox_default_disagreed?: boolean;
   };
+};
+
+type Decision = {
+  module: string | null;
+  priority: string | null;
+  gate: { result: string | null; reason: string | null };
+  rules: { result: string | null; matched: string[] };
+  retrieved: { doc_id: string; score: number | null }[];
+  llm_called: boolean;
+  citations: string[];
+  recommended_actions: string[];
+  next_action: NextAction;
+};
+
+type Lookup = {
+  account: { id: string; name: string; email: string; tier: string | null; verified: boolean | null } | null;
+  records: { id: string; record_type: string; record_ref: string; payload_json: Record<string, unknown> }[];
+  facts: { kind: string; ref: string; summary: string }[];
+  missing: string[];
+  questions: string[];
+  confident: boolean;
+  already_refunded: boolean;
 };
 
 type TicketDetail = {
@@ -59,13 +83,32 @@ type TicketDetail = {
   module_slug: string | null;
   escalation_reason: string | null;
   escalation_address?: string | null;
-  module_collision: boolean;
-  account: { id: string; name: string; email: string; metadata_json: { tier?: string } } | null;
-  related_record: { id: string; record_ref: string; payload_json: { status?: string; total?: number; items?: { name?: string; sku?: string }[] } } | null;
+  next_action: NextAction;
+  decision: Decision | null;
+  lookup: Lookup | null;
+  records: Lookup["records"];
+  account: { id: string; name: string; email: string; metadata_json: { tier?: string; verified?: boolean } } | null;
+  related_record: { id: string; record_ref: string; payload_json: { status?: string; total?: number; refund_status?: string; items?: { name?: string; sku?: string }[] } } | null;
   messages: { id: string; direction: string; author_type: string; body: string; created_at: string }[];
   drafts: Draft[];
   tool_actions: ToolAction[];
   traces: Trace[];
+};
+
+const primaryLabel: Record<NextAction, string> = {
+  triage: "Run triage",
+  review_draft: "Approve draft",
+  approve_tool: "Approve action",
+  send: "Send reply",
+  handle_escalation: "Read why it stopped",
+  done: "Closed",
+};
+
+const busyLabel: Partial<Record<NextAction, string>> = {
+  triage: "Running triage…",
+  review_draft: "Approving…",
+  approve_tool: "Approving…",
+  send: "Sending…",
 };
 
 export function TicketPage() {
@@ -74,9 +117,9 @@ export function TicketPage() {
   const [draftText, setDraftText] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [reveal, setReveal] = useState(0);
+  const [busyAction, setBusyAction] = useState("");
+  const [closedLoop, setClosedLoop] = useState(false);
   const user = currentUser();
-  const reduced = useReducedMotion();
   const visibleId = useRef(id);
   visibleId.current = id;
 
@@ -89,257 +132,314 @@ export function TicketPage() {
   }
 
   useEffect(() => {
-    setReveal(0);
     setError("");
+    setClosedLoop(false);
     void load().catch((err) => {
       if (visibleId.current === id) setError(err instanceof Error ? err.message : "The ticket did not load. Return to the queue and open it again.");
     });
   }, [id]);
 
-  async function act(path: string, note: string, body?: unknown) {
+  async function act(path: string, note: string, label?: string, body?: unknown, method = "POST") {
     setBusy(true);
+    setBusyAction(label ?? note);
     setError("");
     try {
-      await api(path, { method: "POST", body });
+      await api(path, { method, body });
       toast(note);
-      if (path.endsWith("/triage")) setReveal((value) => value + 1);
+      if (path.endsWith("/send") || path.endsWith("/execute")) setClosedLoop(true);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The action did not complete. Try it again.");
+      setError(err instanceof Error ? err.message : "The action did not complete.");
       await load().catch(() => undefined);
     } finally {
       setBusy(false);
+      setBusyAction("");
     }
   }
 
   if (!ticket || ticket.id !== id) return <p className="text-sm text-muted">{error || "Loading ticket."}</p>;
   const draft = ticket.drafts[0];
   const trace = ticket.traces[0];
-  const escalated = ticket.status === "escalated" || draft?.confidence_gate_result === "escalated" || trace?.confidence_gate_result === "escalated";
-  const motionProps = reduced || reveal === 0 ? {} : { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.25, ease: "easeOut" as const } };
+  const next = ticket.next_action;
+  const escalated = ticket.status === "escalated" || next === "handle_escalation";
+  const proposed = ticket.tool_actions.find((action) => action.status === "proposed");
 
-  const thread = <Thread ticket={ticket} />;
-  const context = <Context ticket={ticket} userRole={user?.role} busy={busy} reload={load} setError={setError} />;
-  const draftPanel = <DraftPanel ticket={ticket} draft={draft} trace={trace} draftText={draftText} setDraftText={setDraftText} busy={busy} act={act} reload={load} reveal={reveal} setError={setError} />;
-  const actions = <Actions ticket={ticket} trace={trace} busy={busy} act={act} />;
+  function runPrimary() {
+    if (next === "triage") return act(`/tickets/${id}/triage`, "Triage finished", "Running triage…");
+    if (next === "review_draft") return act(`/tickets/${id}/draft/approve`, "Draft approved", "Approving…");
+    if (next === "approve_tool" && proposed) return act(`/tool-actions/${proposed.id}/approve`, `${proposed.tool_key.replaceAll("_", " ")} approved`, "Approving…");
+    if (next === "send") return act(`/tickets/${id}/send`, "Reply sent", "Sending…");
+    return Promise.resolve();
+  }
+
+  const headerPrimary = busy && busyLabel[next] ? busyLabel[next] : primaryLabel[next] ?? next;
 
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">{ticket.subject}</h1>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Mono>{ticket.id}</Mono>
-            <Badge tone={ticket.status === "escalated" ? "danger" : "neutral"}>{ticket.status}</Badge>
-            {ticket.module_slug && <Badge>{ticket.module_slug}</Badge>}
-            {ticket.priority && <Badge tone={ticket.priority}>{ticket.priority}</Badge>}
-            {ticket.sentiment && <Badge>{ticket.sentiment}</Badge>}
-            {ticket.intent && <Badge>{ticket.intent}</Badge>}
+      <PageHeader
+        title={ticket.subject}
+        detail={`${ticket.id} · ${ticket.status}${ticket.module_slug ? ` · ${ticket.module_slug}` : ""}`}
+        action={
+          <div className="flex flex-wrap gap-2">
+            {(next === "done") ? (
+              <Button asChild><Link to="/queue">Closed</Link></Button>
+            ) : next === "handle_escalation" ? (
+              <Button disabled>Read why it stopped</Button>
+            ) : (
+              <Button disabled={busy || (next === "approve_tool" && !proposed)} onClick={() => void runPrimary()}>{headerPrimary}</Button>
+            )}
+            {(closedLoop || next === "done" || escalated) && next !== "handle_escalation" && next !== "done" && (
+              <Button variant="secondary" asChild><Link to="/queue">Back to queue</Link></Button>
+            )}
           </div>
-        </div>
-        <Button className="sticky top-2" disabled={busy} onClick={() => void act(`/tickets/${id}/triage`, "Triage finished")}>Run triage</Button>
+        }
+      />
+      <div className="flex flex-wrap gap-2">
+        <Mono>{ticket.id}</Mono>
+        <Badge tone={ticket.status === "escalated" ? "danger" : "neutral"}>{ticket.status}</Badge>
+        {ticket.module_slug && <Badge>{ticket.module_slug}</Badge>}
+        {ticket.priority && <Badge tone={ticket.priority}>{ticket.priority}</Badge>}
+        <Badge>{primaryLabel[next] ?? next}</Badge>
       </div>
       <ErrorNote message={error} />
-      {(escalated || ticket.escalation_reason) && (
-        <motion.div
-          className="rounded-md border-2 border-danger bg-danger-bg p-4 text-sm text-danger"
-          initial={false}
-          animate={{ borderColor: "var(--danger)" }}
-          transition={{ duration: reduced ? 0 : 0.25, ease: "easeInOut" }}
-          role="status"
-        >
+      {escalated && (
+        <motion.div className="rounded-card border-2 border-danger bg-danger-bg p-4 text-sm text-danger" initial={false} role="status">
           <p className="flex items-center gap-2 text-base font-semibold"><ShieldAlert size={18} aria-hidden /> Escalated</p>
-          <p className="mt-1">{ticket.escalation_reason || trace?.input_json?.gate?.reason || "A safety check stopped an automatic draft."}</p>
-          {ticket.escalation_address && <p className="mt-1">Routed to {ticket.escalation_address}. A failed forward still leaves the ticket escalated.</p>}
-          {trace && !trace.llm_called && <p className="mt-1">No drafting model call was made for this run.</p>}
+          <p className="mt-1">{ticket.escalation_reason || ticket.decision?.gate.reason || trace?.input_json?.gate?.reason || "A safety check stopped an automatic draft."}</p>
+          {ticket.escalation_address && <p className="mt-1">Routed to {ticket.escalation_address}.</p>}
+          {ticket.decision && !ticket.decision.llm_called && <p className="mt-1">Drafting model was not called.</p>}
         </motion.div>
       )}
-      <div className="md:hidden">
-        <Tabs defaultValue="thread">
-          <TabsList>
-            <TabsTrigger value="thread">Thread</TabsTrigger>
-            <TabsTrigger value="context">Context</TabsTrigger>
-            <TabsTrigger value="draft">Draft</TabsTrigger>
-            <TabsTrigger value="actions">Actions</TabsTrigger>
-          </TabsList>
-          <TabsContent value="thread">{thread}</TabsContent>
-          <TabsContent value="context">{context}</TabsContent>
-          <TabsContent value="draft"><motion.div key={reveal} {...motionProps}>{draftPanel}</motion.div></TabsContent>
-          <TabsContent value="actions">{actions}</TabsContent>
-        </Tabs>
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[1.2fr_1fr_1fr]">
+        <Lane title="INPUT">
+          <Thread ticket={ticket} />
+          <CustomerRecord ticket={ticket} userRole={user?.role} busy={busy} act={act} />
+        </Lane>
+        <Lane title="PROCESS">
+          <DecisionStrip ticket={ticket} trace={trace} />
+        </Lane>
+        <Lane title="OUTPUT">
+          <DraftPanel ticket={ticket} draft={draft} trace={trace} draftText={draftText} setDraftText={setDraftText} busy={busy} busyAction={busyAction} next={next} act={act} />
+          <Actions ticket={ticket} busy={busy} busyAction={busyAction} act={act} />
+        </Lane>
       </div>
-      <div className="hidden gap-4 md:grid md:grid-cols-[1.4fr_0.8fr]">
-        <div className="grid gap-4">
-          {thread}
-          <motion.div key={reveal} {...motionProps}>{draftPanel}</motion.div>
-        </div>
-        <div className="grid content-start gap-4">
-          {context}
-          {actions}
-        </div>
-      </div>
+      {(closedLoop || next === "done" || escalated) && (
+        <div className="flex justify-end"><Button variant="secondary" asChild><Link to="/queue">Back to queue</Link></Button></div>
+      )}
     </div>
+  );
+}
+
+function Lane({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="grid min-w-0 content-start gap-3">
+      <h2 className="text-[10px] font-medium uppercase tracking-wider text-muted">{title}</h2>
+      {children}
+    </section>
   );
 }
 
 function Thread({ ticket }: { ticket: TicketDetail }) {
   return (
-    <section className="grid gap-3">
-      <h2 className="text-lg font-semibold">Thread</h2>
+    <Card className="grid gap-3">
+      <h3 className="text-base font-semibold">Customer email</h3>
       {ticket.messages.length === 0 && <Message direction="inbound" author="customer" body={ticket.body_raw} />}
       {ticket.messages.map((message) => <Message key={message.id} direction={message.direction} author={message.author_type} body={message.body} />)}
-    </section>
+    </Card>
   );
 }
 
 function Message({ direction, author, body }: { direction: string; author: string; body: string }) {
   const internal = direction === "internal";
   const outbound = direction === "outbound";
-  const ai = author === "ai";
-  const Icon = ai ? Bot : internal ? Lock : UserRound;
+  const Icon = author === "ai" ? Bot : internal ? Lock : UserRound;
   return (
-    <article className={`rounded-md border p-3 text-sm ${internal ? "border-caution bg-caution-bg" : outbound ? "border-line bg-raised" : "border-line bg-surface"}`}>
+    <article className={`rounded-card border p-3 text-sm ${internal ? "border-caution bg-caution-bg" : outbound ? "border-line bg-raised" : "border-line bg-surface"}`}>
       <p className="mb-1 flex items-center gap-2 text-xs text-muted"><Icon size={14} aria-hidden /> {direction} · {author}</p>
       <p className="whitespace-pre-wrap">{body}</p>
     </article>
   );
 }
 
-function DraftPanel({ ticket, draft, trace, draftText, setDraftText, busy, act, reload, reveal, setError }: {
+function CustomerRecord({ ticket, userRole, busy, act }: { ticket: TicketDetail; userRole?: string; busy: boolean; act: (path: string, note: string, label?: string, body?: unknown, method?: string) => Promise<void> }) {
+  const lookup = ticket.lookup;
+  const account = lookup?.account ?? (ticket.account ? { id: ticket.account.id, name: ticket.account.name, email: ticket.account.email, tier: ticket.account.metadata_json?.tier ?? null, verified: ticket.account.metadata_json?.verified ?? null } : null);
+  const records = ticket.records ?? [];
+  const orders = records.filter((row) => row.record_type === "order");
+  const txns = records.filter((row) => row.record_type === "transaction");
+  const logins = records.filter((row) => row.record_type === "auth_event");
+  if (!account && records.length === 0) {
+    return <Card><h3 className="text-base font-semibold">Customer record</h3><p className="mt-2 text-sm text-muted">No account for this email — ask only for an order id or last four.</p></Card>;
+  }
+  return (
+    <Card className="grid gap-3">
+      <h3 className="text-base font-semibold">Customer record</h3>
+      {account ? (
+        <div className="grid gap-1 text-sm">
+          <strong>{account.name}</strong>
+          <span className="text-muted">{account.email}</span>
+          <span>Tier {account.tier ?? "unknown"} · {account.verified ? "verified" : "not verified"}</span>
+        </div>
+      ) : <p className="text-sm text-muted">No account for this email — ask only for an order id or last four.</p>}
+      {orders.map((order) => (
+        <div key={order.id} className="grid gap-1 border-t border-line pt-2 text-sm">
+          <Mono>{order.record_ref}</Mono>
+          <span>Status {String(order.payload_json.status ?? "unknown")} · payment {String(order.payload_json.payment_status ?? "n/a")} · refund {String(order.payload_json.refund_status ?? "none")}</span>
+          {(userRole === "supervisor" || userRole === "admin") && ticket.related_record?.id === order.id && (
+            <Button variant="secondary" disabled={busy} onClick={() => void act(`/related-records/${order.id}`, "Order status updated", "Updating…", { status: "status_changed_after_recommendation" }, "PATCH")}>Change order status</Button>
+          )}
+        </div>
+      ))}
+      {txns.map((txn) => (
+        <p key={txn.id} className="text-sm"><Mono>{txn.record_ref}</Mono> {String(txn.payload_json.status)} {String(txn.payload_json.amount ?? "")} last four {String(txn.payload_json.last_four ?? "n/a")}</p>
+      ))}
+      {logins.map((event) => (
+        <p key={event.id} className="text-sm">{String(event.payload_json.event_type)} · {String(event.payload_json.at ?? "")}</p>
+      ))}
+    </Card>
+  );
+}
+
+function DecisionStrip({ ticket, trace }: { ticket: TicketDetail; trace: Trace | undefined }) {
+  const decision = ticket.decision;
+  if (!decision && !trace) {
+    return <Card><p className="text-sm text-muted">No run yet. Triage to fill gate, rules, and citations.</p></Card>;
+  }
+  const gate = decision?.gate.result ?? trace?.confidence_gate_result;
+  const rules = decision?.rules.result ?? trace?.rule_layer_result;
+  const llm = decision?.llm_called ?? trace?.llm_called;
+  const recommended = decision?.recommended_actions?.length ? decision.recommended_actions : (trace?.recommended_actions ?? []);
+  const retrieved = decision?.retrieved?.length
+    ? decision.retrieved
+    : (trace?.retrieved_doc_ids ?? []).map((docId, index) => ({ doc_id: docId, score: trace?.retrieval_scores?.[index] ?? null }));
+  return (
+    <Card className="grid gap-3">
+      <h3 className="text-base font-semibold">Decision</h3>
+      <p className="text-sm">{decision?.module ?? ticket.module_slug ?? "unclassified"} · {decision?.priority ?? ticket.priority ?? "no priority"}</p>
+      <div className="flex flex-wrap gap-2">
+        <Badge tone={gate === "pass" ? "safe" : "danger"}>gate {gate ?? "n/a"}</Badge>
+        <Badge tone={rules === "blocked" ? "danger" : "neutral"}>rules {rules ?? "n/a"}</Badge>
+        <Badge tone={llm ? "safe" : "neutral"}>{llm ? "model called" : "model not called"}</Badge>
+      </div>
+      {decision?.gate.reason && <p className="text-sm text-muted">{decision.gate.reason}</p>}
+      {(decision?.rules.matched?.length ?? 0) > 0 && <p className="font-mono text-xs text-muted">{decision!.rules.matched.join(", ")}</p>}
+      {recommended.length > 0 && <p className="text-sm">Recommended: {recommended.join(", ")}</p>}
+      {ticket.lookup && (
+        <div className="grid gap-1 border-t border-line pt-2 text-sm">
+          <Badge tone={ticket.lookup.confident ? "safe" : "neutral"}>
+            {ticket.lookup.confident ? "lookup confident" : ticket.lookup.questions.length > 0 ? "need info" : "account on file"}
+          </Badge>
+          {ticket.lookup.already_refunded && <p>Refund already processed on the order.</p>}
+          {ticket.lookup.facts.map((fact) => <p key={`${fact.kind}-${fact.ref}`}>{fact.summary}</p>)}
+          {ticket.lookup.questions.length > 0 && <p>Ask only: {ticket.lookup.questions.join(", ")}</p>}
+        </div>
+      )}
+      <div className="grid gap-1">
+        {retrieved.map((item) => {
+          const snippet = trace?.input_json?.snippets?.find((row) => row.doc_id === item.doc_id);
+          return (
+            <InfoPopover key={item.doc_id} trigger={<button type="button" className="min-h-11 rounded-card border border-line px-3 text-left font-mono text-xs">{item.doc_id} · {item.score != null ? Number(item.score).toFixed(3) : "n/a"}</button>}>
+              <p className="font-medium">{snippet?.title ?? item.doc_id}</p>
+              <p className="mt-2">{snippet?.snippet ?? "No snippet stored."}</p>
+            </InfoPopover>
+          );
+        })}
+        {retrieved.length === 0 && <p className="text-sm text-muted">No retrieved docs.</p>}
+      </div>
+    </Card>
+  );
+}
+
+function DraftPanel({ ticket, draft, trace, draftText, setDraftText, busy, busyAction, next, act }: {
   ticket: TicketDetail;
   draft: Draft | undefined;
   trace: Trace | undefined;
   draftText: string;
   setDraftText: (value: string) => void;
   busy: boolean;
-  act: (path: string, note: string) => Promise<void>;
-  reload: () => Promise<void>;
-  reveal: number;
-  setError: (message: string) => void;
+  busyAction: string;
+  next: NextAction;
+  act: (path: string, note: string, label?: string, body?: unknown, method?: string) => Promise<void>;
 }) {
+  const citations = Array.isArray(draft?.citation_doc_ids) ? draft.citation_doc_ids : [];
+  const llmCalled = ticket.decision?.llm_called ?? draft?.llm_called ?? false;
+  if (ticket.status === "escalated") {
+    return (
+      <Card className="grid gap-2">
+        <h3 className="text-base font-semibold">Reply</h3>
+        <p className="text-sm text-muted">
+          {llmCalled
+            ? "This ticket is escalated. A human must handle it; do not approve or send from here."
+            : "No customer reply. The drafting model was not called."}
+        </p>
+      </Card>
+    );
+  }
   return (
-    <section className="grid gap-3">
-      <h2 className="text-lg font-semibold">Draft</h2>
-      {!draft && <EmptyState title="No draft yet" detail={reveal ? "Triage did not produce a draft. Read the escalation banner before sending anything." : "Run triage to retrieve policy and draft, or to escalate."} />}
+    <Card className="grid gap-3">
+      <h3 className="text-base font-semibold">Reply</h3>
+      {!draft && <EmptyState title="No draft yet" detail="Run triage to retrieve policy and draft." />}
       {draft && (
         <>
           <div className="flex flex-wrap gap-2">
-            {draft.citation_doc_ids.map((docId) => {
-              const snippet = trace?.input_json.snippets?.find((item) => item.doc_id === docId);
-              const score = snippet?.score ?? draft.retrieval_score;
+            {citations.map((docId) => {
+              const snippet = trace?.input_json?.snippets?.find((item) => item.doc_id === docId);
+              const fromDecision = ticket.decision?.retrieved?.find((row) => row.doc_id === docId)?.score;
+              const traceIndex = trace?.retrieved_doc_ids?.indexOf(docId) ?? -1;
+              const fromTrace = traceIndex >= 0 ? trace?.retrieval_scores?.[traceIndex] ?? null : null;
+              const score = snippet?.score ?? fromDecision ?? fromTrace ?? draft.retrieval_score;
               return (
                 <InfoPopover key={docId} trigger={<button type="button" className="min-h-11 rounded-full border border-line px-3 font-mono text-xs">{docId} · {score != null ? Number(score).toFixed(3) : "n/a"}</button>}>
                   <p className="font-medium">{snippet?.title ?? docId}</p>
-                  <Mono>{docId}</Mono>
-                  <p className="mt-2">{snippet?.snippet ?? "No snippet was stored for this citation."}</p>
-                  <p className="mt-2 font-mono text-xs">score {score != null ? Number(score).toFixed(3) : "n/a"}</p>
+                  <p className="mt-2">{snippet?.snippet ?? "No snippet stored."}</p>
                 </InfoPopover>
               );
             })}
             <Badge>{draft.status}</Badge>
-            <Badge tone={draft.llm_called ? "safe" : "neutral"}>{draft.llm_called ? "model called" : "model not called"}</Badge>
           </div>
-          <Textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} aria-label="Draft reply" />
-          <div className="sticky bottom-20 flex flex-wrap gap-2 bg-bg py-2 md:bottom-0">
-            <Button variant="secondary" disabled={busy} onClick={() => void api(`/tickets/${ticket.id}/draft`, { method: "PATCH", body: { body: draftText, draft_id: draft.id } }).then(() => { toast("Draft edit saved"); return reload(); }).catch((err) => setError(err instanceof Error ? err.message : "The draft edit did not save. Try again."))}>Save edit</Button>
-            <Button disabled={busy} onClick={() => void act(`/tickets/${ticket.id}/draft/approve`, "Draft approved")}>Approve draft</Button>
-            <Button variant="secondary" disabled={busy} onClick={() => void act(`/tickets/${ticket.id}/draft/reject`, "Draft rejected")}>Reject</Button>
-            <Button disabled={busy} onClick={() => void act(`/tickets/${ticket.id}/send`, "Reply sent")}>Send</Button>
+          <Textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} aria-label="Draft reply" disabled={ticket.status === "closed" || ticket.status === "sent"} />
+          {ticket.status !== "closed" && ticket.status !== "sent" && (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" disabled={busy} onClick={() => void act(`/tickets/${ticket.id}/draft`, "Draft edit saved", "Saving…", { body: draftText, draft_id: draft.id }, "PATCH")}>Save edit</Button>
+            {next !== "review_draft" && (
+              <Button variant="secondary" disabled={busy || draft.status === "approved"} onClick={() => void act(`/tickets/${ticket.id}/draft/approve`, "Draft approved", "Approving…")}>{draft.status === "approved" ? "Approved" : "Approve draft"}</Button>
+            )}
+            <Button variant="secondary" disabled={busy || draft.status === "rejected"} onClick={() => void act(`/tickets/${ticket.id}/draft/reject`, "Draft rejected", "Rejecting…")}>{draft.status === "rejected" ? "Rejected" : "Reject"}</Button>
+            {next !== "send" && (
+              <Button variant="secondary" disabled={busy || draft.status !== "approved"} onClick={() => void act(`/tickets/${ticket.id}/send`, "Reply sent", "Sending…")}>{draft.status === "sent" ? "Sent" : busyAction === "Sending…" ? "Sending…" : "Send reply"}</Button>
+            )}
           </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function Context({ ticket, userRole, busy, reload, setError }: { ticket: TicketDetail; userRole?: string; busy: boolean; reload: () => Promise<void>; setError: (message: string) => void }) {
-  return (
-    <section className="grid gap-3 rounded-md border border-line bg-surface p-3">
-      <h2 className="text-lg font-semibold">Account</h2>
-      {ticket.account ? (
-        <>
-          <div>{ticket.account.name}</div>
-          <div className="text-sm text-muted">{ticket.account.email}</div>
-          <div className="text-sm text-muted">Tier {ticket.account.metadata_json?.tier ?? "unknown"}</div>
-        </>
-      ) : <p className="text-sm text-muted">No linked account. Match the sender when the next email arrives.</p>}
-      <h3 className="text-base font-semibold">Related record</h3>
-      {ticket.related_record ? (
-        <>
-          <Mono>{ticket.related_record.record_ref}</Mono>
-          <div className="text-sm">Status {ticket.related_record.payload_json.status}</div>
-          <div className="text-sm">Total {ticket.related_record.payload_json.total}</div>
-          {(userRole === "supervisor" || userRole === "admin") && (
-            <Button variant="secondary" disabled={busy} onClick={() => void api(`/related-records/${ticket.related_record!.id}`, { method: "PATCH", body: { status: "status_changed_after_recommendation" } }).then(() => { toast("Order status changed. Approving the same action again should go stale."); return reload(); }).catch((err) => setError(err instanceof Error ? err.message : "The order status did not change. Try again."))}>Change order status</Button>
           )}
         </>
-      ) : <p className="text-sm text-muted">No linked record.</p>}
-    </section>
+      )}
+    </Card>
   );
 }
 
-function StaleNote() {
-  const reduced = useReducedMotion();
+function Actions({ ticket, busy, busyAction, act }: { ticket: TicketDetail; busy: boolean; busyAction: string; act: (path: string, note: string, label?: string) => Promise<void> }) {
   return (
-    <motion.div className="rounded-md border border-stale bg-stale-bg p-3 text-sm text-stale" initial={reduced ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: reduced ? 0 : 0.2, ease: "easeInOut" }} role="status">
-      Stale approval. The order or policy changed after this action was proposed, so it was not executed.
-    </motion.div>
-  );
-}
-
-function Actions({ ticket, trace, busy, act }: { ticket: TicketDetail; trace: Trace | undefined; busy: boolean; act: (path: string, note: string) => Promise<void> }) {
-  return (
-    <>
-      <section className="grid gap-3 rounded-md border border-line bg-surface p-3">
-        <h2 className="text-lg font-semibold">Tool actions</h2>
-        {ticket.tool_actions.length === 0 && <EmptyState title="No actions proposed" detail="Run triage. Recommendations stay proposed until a person approves them." />}
-        {ticket.tool_actions.map((action) => (
-          <article key={action.id} className="grid gap-2 border-t border-line pt-3">
-            <strong>{action.tool_key}</strong>
-            <div className="flex flex-wrap gap-2">
-              <Badge tone={action.risk_level === "high" ? "urgent" : action.risk_level}>{action.risk_level}</Badge>
-              <Badge tone={action.status === "stale_blocked" ? "stale" : action.status === "executed" ? "safe" : "neutral"}>{action.status}</Badge>
-            </div>
-            <p><Mono>idempotency {action.idempotency_key}</Mono></p>
-            <p><Mono>hash {(action.snapshot_hash || "").slice(0, 12)}…</Mono></p>
-            {action.status === "stale_blocked" && <StaleNote />}
-            <div className="flex flex-wrap gap-2">
-              <Button disabled={busy} onClick={() => void act(`/tool-actions/${action.id}/approve`, action.tool_key === "start_refund_review" ? "Refund review approved — awaiting execution" : `${action.tool_key.replaceAll("_", " ")} approved — awaiting execution`)}>Approve</Button>
-              <Button variant="secondary" disabled={busy} onClick={() => void act(`/tool-actions/${action.id}/reject`, "Action rejected")}>Reject</Button>
-              <Button disabled={busy} onClick={() => void act(`/tool-actions/${action.id}/execute`, `${action.tool_key} executed`)}>Execute</Button>
-            </div>
-          </article>
-        ))}
-      </section>
-      <TraceTimeline trace={trace} />
-    </>
-  );
-}
-
-function TraceTimeline({ trace }: { trace: Trace | undefined }) {
-  const [open, setOpen] = useState(false);
-  if (!trace) return <section className="rounded-md border border-line bg-surface p-3"><h2 className="text-lg font-semibold">Trace</h2><p className="mt-2 text-sm text-muted">No AI run yet. Run triage to record the pipeline.</p></section>;
-  const stages = [
-    { label: "Retrieval", detail: (Array.isArray(trace.retrieved_doc_ids) ? trace.retrieved_doc_ids : []).map((docId, index) => `${docId} ${Number(trace.retrieval_scores?.[index] ?? 0).toFixed(3)}`).join(", ") || "No documents" },
-    { label: "Rules", detail: (trace.input_json.pre?.matched ?? []).join(", ") || trace.rule_layer_result },
-    { label: "Confidence gate", detail: `${trace.confidence_gate_result}${trace.input_json.gate?.reason ? ` — ${trace.input_json.gate.reason}` : ""}` },
-    { label: "Model", detail: trace.llm_called ? "Drafting model was called." : "Drafting model was not called." },
-    { label: "Actions", detail: (Array.isArray(trace.recommended_actions) ? trace.recommended_actions : []).join(", ") || "None" },
-  ];
-  return (
-    <section className="grid gap-3 rounded-md border border-line bg-surface p-3">
-      <h2 className="text-lg font-semibold">Trace</h2>
-      <ol className="grid gap-3 border-l border-line pl-3">
-        {stages.map((stage) => (
-          <li key={stage.label}>
-            <p className="text-sm font-medium">{stage.label}</p>
-            <p className="font-mono text-xs text-muted">{stage.detail}</p>
-          </li>
-        ))}
-      </ol>
-      {trace.input_json.mailbox_default_disagreed && <p className="text-sm text-muted">Mailbox default disagreed with the keyword classification. The keyword result was kept.</p>}
-      <Button variant="secondary" onClick={() => setOpen((value) => !value)} aria-expanded={open}>{open ? "Hide raw trace" : "Show raw trace"}</Button>
-      {open && <pre className="whitespace-pre-wrap rounded-md bg-raised p-3 font-mono text-xs">{JSON.stringify({ recommended: trace.recommended_actions, final: trace.final_status, run: trace.id }, null, 2)}</pre>}
-    </section>
+    <Card className="grid gap-3">
+      <h3 className="text-base font-semibold">Tools</h3>
+      {ticket.tool_actions.length === 0 && <p className="text-sm text-muted">No actions proposed.</p>}
+      {ticket.tool_actions.map((action) => (
+        <article key={action.id} className="grid gap-2 border-t border-line pt-3">
+          <strong>{action.tool_key}</strong>
+          <div className="flex flex-wrap gap-2">
+            <Badge tone={action.risk_level === "high" ? "urgent" : action.risk_level}>{action.risk_level}</Badge>
+            <Badge tone={action.status === "stale_blocked" ? "stale" : action.status === "executed" ? "safe" : "neutral"}>{action.status}</Badge>
+          </div>
+          <p><Mono>idempotency {action.idempotency_key}</Mono></p>
+          {action.status === "stale_blocked" && (
+            <p className="rounded-card border border-stale bg-stale-bg p-3 text-sm text-stale">Stale approval. The order or policy changed after this action was proposed.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={busy || !["proposed", "pending_approval"].includes(action.status)} onClick={() => void act(`/tool-actions/${action.id}/approve`, `${action.tool_key.replaceAll("_", " ")} approved`, "Approving…")}>{action.status === "approved" || action.status === "executed" ? "Approved" : busyAction === "Approving…" ? "Approving…" : "Approve"}</Button>
+            <Button variant="secondary" disabled={busy || !["proposed", "pending_approval"].includes(action.status)} onClick={() => void act(`/tool-actions/${action.id}/reject`, "Action rejected", "Rejecting…")}>{action.status === "rejected" ? "Rejected" : "Reject"}</Button>
+            <Button disabled={busy || action.status !== "approved"} onClick={() => void act(`/tool-actions/${action.id}/execute`, `${action.tool_key} executed`, "Executing…")}>{action.status === "executed" ? "Executed" : busyAction === "Executing…" ? "Executing…" : "Execute"}</Button>
+          </div>
+          <p className="text-xs text-muted">Execute is simulated. It records a result.</p>
+        </article>
+      ))}
+    </Card>
   );
 }

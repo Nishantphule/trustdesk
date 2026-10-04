@@ -2,13 +2,14 @@ import { toast } from "sonner";
 import { api, currentUser } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
+import { Card, PageHeader } from "@/components/ui/layout";
 import { useAdmin } from "./context";
 
 export function TenantPage() {
   const { setError } = useAdmin();
   if (currentUser()?.role !== "admin") return <p className="text-sm text-muted">Only an admin can create another organization.</p>;
   return (
-    <form className="mx-auto grid max-w-xl gap-3" onSubmit={(event) => {
+    <form className="mx-auto grid max-w-xl gap-4" onSubmit={(event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       void api("/orgs", {
@@ -21,17 +22,18 @@ export function TenantPage() {
           password: String(form.get("password")),
           confidence_threshold_default: Number(form.get("threshold") || 0.2),
         },
-      }).then((created) => toast(`Created ${(created as { name: string }).name}. Sign in as the new admin to configure modules. This session still belongs to the current org.`)).catch((err) => setError(err.message));
+      }).then((created) => toast(`Created ${(created as { name: string }).name}`)).catch((err) => setError(err.message));
     }}>
-      <h1 className="text-xl font-semibold">New tenant</h1>
-      <p className="text-sm text-muted">Example: Northwind Mutual, module Claims, then publish a policy and ingest a demo email while signed in as that admin.</p>
-      <Field label="Organization name"><Input name="name" defaultValue="Northwind Mutual" /></Field>
-      <Field label="Slug"><Input name="slug" defaultValue="northwind-mutual" /></Field>
-      <Field label="Admin name"><Input name="admin" defaultValue="Northwind Admin" /></Field>
-      <Field label="Admin email"><Input name="email" type="email" defaultValue="admin@northwind.example" /></Field>
-      <Field label="Password"><Input name="password" defaultValue="TrustDesk123!" /></Field>
+      <PageHeader title="New tenant" detail="Creates another organization. This session stays on the current org." />
+      <Card className="grid gap-3">
+      <Field label="Organization name"><Input name="name" required /></Field>
+      <Field label="Slug"><Input name="slug" required /></Field>
+      <Field label="Admin name"><Input name="admin" required /></Field>
+      <Field label="Admin email"><Input name="email" type="email" required /></Field>
+      <Field label="Password"><Input name="password" type="password" required minLength={8} autoComplete="new-password" /></Field>
       <Field label="Confidence threshold"><Input name="threshold" type="number" step="0.01" defaultValue={0.2} /></Field>
-      <div className="sticky bottom-20 border-t border-line bg-bg py-3 md:bottom-0"><Button type="submit">Create organization</Button></div>
+      <div className="sticky bottom-20 border-t border-line bg-surface py-3 md:bottom-0"><Button type="submit">Create organization</Button></div>
+      </Card>
     </form>
   );
 }

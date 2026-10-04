@@ -1,0 +1,47 @@
+[
+  {
+    "txn_id": "txn_5006",
+    "customer_id": "cus_1006",
+    "order_id": "ord_5006",
+    "amount": 15999,
+    "currency": "INR",
+    "status": "captured",
+    "captured_at": "2026-06-28T11:00:00+05:30",
+    "last_four": "6106",
+    "method": "card"
+  },
+  {
+    "txn_id": "txn_9101",
+    "customer_id": "cus_9101",
+    "order_id": "ord_9101",
+    "amount": 6999,
+    "currency": "INR",
+    "status": "captured",
+    "captured_at": "2026-09-20T10:02:00+05:30",
+    "last_four": "4412",
+    "method": "card"
+  },
+  {
+    "txn_id": "txn_9103a",
+    "customer_id": "cus_9103",
+    "order_id": "ord_9103",
+    "amount": 12999,
+    "currency": "INR",
+    "status": "captured",
+    "captured_at": "2026-09-12T16:04:00+05:30",
+    "last_four": "8821",
+    "method": "card"
+  },
+  {
+    "txn_id": "txn_9103b",
+    "customer_id": "cus_9103",
+    "order_id": "ord_9103",
+    "amount": 12999,
+    "currency": "INR",
+    "status": "captured",
+    "captured_at": "2026-09-12T16:04:18+05:30",
+    "last_four": "8821",
+    "method": "card",
+    "duplicate_of": "txn_9103a"
+  }
+]

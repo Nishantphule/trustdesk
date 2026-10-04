@@ -58,7 +58,18 @@ export function registerGmailPublicRoutes(api: Router) {
   });
 }
 
+function gmailOauthConfigured() {
+  return Boolean(config.googleClientId && config.googleClientSecret && config.tokenEncryptionKey);
+}
+
 export function registerGmailAuthedRoutes(api: Router) {
+  api.get(
+    "/mailboxes/oauth/status",
+    asyncHandler(async (_req, res) => {
+      res.json({ configured: gmailOauthConfigured(), redirect_uri: config.googleRedirectUri });
+    }),
+  );
+
   api.get(
     "/mailboxes/oauth/start",
     asyncHandler(async (req, res) => {
@@ -70,7 +81,7 @@ export function registerGmailAuthedRoutes(api: Router) {
         throw new HttpError(403, "Only an admin can connect a shared mailbox", "FORBIDDEN");
       }
       await assertMailboxOwner(user.orgId, ownerType as MailboxOwnerType, ownerId);
-      if (!config.googleClientId || !config.googleClientSecret || !config.tokenEncryptionKey) {
+      if (!gmailOauthConfigured()) {
         throw new HttpError(400, "Google OAuth is not configured", "VALIDATION");
       }
       const url = gmailAuthUrl(

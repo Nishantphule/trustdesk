@@ -15,7 +15,7 @@ const modules = [
   { slug: "refund", name: "Refund", keywords: ["refund", "return", "damaged", "cracked", "replacement", "defective", "license", "final sale"] },
   { slug: "warranty", name: "Warranty", keywords: ["warranty", "battery", "swelling", "swollen"] },
   { slug: "billing", name: "Billing", keywords: ["charge", "charged", "charges", "billing", "double charge", "two charges"] },
-  { slug: "account_security", name: "Account Security", keywords: ["account email", "identity", "system prompt", "api key", "internal notes", "hidden prompt"] },
+  { slug: "account_security", name: "Account Security", keywords: ["account email", "identity", "password", "can't log in", "cannot log in", "sign in", "locked out", "system prompt", "api key", "internal notes", "hidden prompt"] },
   { slug: "general", name: "General", keywords: ["coupon", "system override", "ignore all instructions", "ignore previous instructions"] },
 ];
 

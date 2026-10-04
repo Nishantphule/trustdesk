@@ -88,6 +88,38 @@
     "items": [
       {"sku": "BG-WATCH-04", "name": "BlueWatch Sport", "quantity": 1, "category": "wearable", "final_sale": false}
     ]
+  },
+  {
+    "order_id": "ord_9101",
+    "customer_id": "cus_9101",
+    "status": "delivered",
+    "placed_at": "2026-09-20",
+    "delivered_at": "2026-09-24",
+    "eligible_return_until": "2026-10-01",
+    "total": 6999,
+    "currency": "INR",
+    "payment_status": "paid",
+    "refund_status": "none",
+    "tracking_number": "BLUETRK19101",
+    "items": [
+      {"sku": "BG-PULSE-01", "name": "PulseBuds Mini", "quantity": 1, "category": "audio", "final_sale": false}
+    ]
+  },
+  {
+    "order_id": "ord_9103",
+    "customer_id": "cus_9103",
+    "status": "delivered",
+    "placed_at": "2026-09-12",
+    "delivered_at": "2026-09-16",
+    "eligible_return_until": "2026-09-23",
+    "total": 12999,
+    "currency": "INR",
+    "payment_status": "paid",
+    "refund_status": "none",
+    "tracking_number": "BLUETRK19103",
+    "items": [
+      {"sku": "BG-CAM-09", "name": "HomeCam Mini", "quantity": 1, "category": "camera", "final_sale": false}
+    ]
   }
 ]
 

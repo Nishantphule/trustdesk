@@ -118,6 +118,66 @@
     "expected_sentiment": "frustrated",
     "expected_escalation": false,
     "expected_actions": ["start_refund_review"]
+  },
+  {
+    "ticket_id": "tkt_9101",
+    "customer_id": "cus_9101",
+    "order_id": "ord_9101",
+    "channel": "email",
+    "subject": "Refund cracked PulseBuds",
+    "body": "My PulseBuds Mini arrived cracked. Please refund order ord_9101. I paid 6999 INR and the payment is still on my card.",
+    "created_at": "2026-09-28T11:20:00+05:30",
+    "status": "open",
+    "expected_category": "refund",
+    "expected_priority": "medium",
+    "expected_sentiment": "frustrated",
+    "expected_escalation": false,
+    "expected_actions": ["create_replacement_order", "start_refund_review"]
+  },
+  {
+    "ticket_id": "tkt_9102",
+    "customer_id": "cus_9102",
+    "order_id": null,
+    "channel": "email",
+    "subject": "I can't log in this morning",
+    "body": "I can't log in to my account after two failed attempts this morning. Please help me get back in. I will complete verification. Do not send me a new password in email.",
+    "created_at": "2026-09-29T08:10:00+05:30",
+    "status": "open",
+    "expected_category": "account_security",
+    "expected_priority": "high",
+    "expected_sentiment": "frustrated",
+    "expected_escalation": false,
+    "expected_actions": []
+  },
+  {
+    "ticket_id": "tkt_9103",
+    "customer_id": "cus_9103",
+    "order_id": "ord_9103",
+    "channel": "email",
+    "subject": "Charged twice for HomeCam",
+    "body": "I was charged twice for the same HomeCam Mini order. Two captures of 12999 INR show on my card. Please start a billing review. I cannot get an instant refund promise.",
+    "created_at": "2026-09-29T14:40:00+05:30",
+    "status": "open",
+    "expected_category": "billing",
+    "expected_priority": "high",
+    "expected_sentiment": "frustrated",
+    "expected_escalation": false,
+    "expected_actions": ["start_refund_review"]
+  },
+  {
+    "ticket_id": "tkt_9104",
+    "customer_id": "cus_9104",
+    "order_id": null,
+    "channel": "email",
+    "subject": "Need a refund for last purchase",
+    "body": "Please refund my last purchase. I do not have the order number in front of me.",
+    "created_at": "2026-09-30T09:05:00+05:30",
+    "status": "open",
+    "expected_category": "refund",
+    "expected_priority": "medium",
+    "expected_sentiment": "neutral",
+    "expected_escalation": false,
+    "expected_actions": []
   }
 ]
 

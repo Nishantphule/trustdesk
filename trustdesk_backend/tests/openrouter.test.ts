@@ -31,8 +31,9 @@ describe("OpenRouterAdapter", () => {
       prompt: "Draft a reply using the untrusted context block.",
       policyChunks: [chunk],
     });
-    expect(drafted.body).toBe("Sorry about the damage. See KB-REFUND-001.");
+    expect(drafted.body).toBe("Sorry about the damage.");
     expect(drafted.citations).toEqual(["KB-REFUND-001"]);
+    expect(drafted.usedLlm).toBe(true);
     expect(seen[0]?.url).toBe("https://openrouter.ai/api/v1/chat/completions");
     const headers = seen[0]?.init?.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer test-key");
@@ -91,8 +92,10 @@ describe("OpenRouterAdapter", () => {
     };
     const emptyDraft = await empty.draft(input);
     const malformedDraft = await malformed.draft(input);
-    expect(emptyDraft.body).toContain("KB-REFUND-001");
-    expect(malformedDraft.body).toContain("KB-REFUND-001");
+    expect(emptyDraft.citations).toContain("KB-REFUND-001");
+    expect(malformedDraft.citations).toContain("KB-REFUND-001");
+    expect(emptyDraft.usedLlm).toBe(false);
+    expect(emptyDraft.body.length).toBeGreaterThan(20);
     expect(emptyDraft.body).not.toBe("  ");
   });
 

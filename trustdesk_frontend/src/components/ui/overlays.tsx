@@ -11,7 +11,7 @@ export function Sheet({ open, onOpenChange, title, children }: { open: boolean; 
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
-        <Dialog.Content className="fixed inset-y-0 left-0 z-50 flex w-[min(100%,20rem)] flex-col gap-2 bg-surface p-4 shadow-none border-r border-line" aria-describedby={undefined}>
+        <Dialog.Content className="fixed inset-y-0 left-0 z-50 flex w-[min(100%,20rem)] flex-col gap-2 border-r border-line bg-surface p-4 shadow-card" aria-describedby={undefined}>
           <Dialog.Title className="text-lg font-semibold">{title}</Dialog.Title>
           <Dialog.Description className="sr-only">Choose a section. Focus stays inside this panel until you close it.</Dialog.Description>
           {children}
@@ -31,7 +31,7 @@ export function Menu({ trigger, label, children }: { trigger: ReactNode; label: 
         </button>
       </Dropdown.Trigger>
       <Dropdown.Portal>
-        <Dropdown.Content className="z-50 min-w-44 rounded-md border border-line bg-surface p-1 text-sm" sideOffset={6}>
+        <Dropdown.Content className="z-50 min-w-44 rounded-card border border-line bg-surface p-1 text-sm shadow-card" sideOffset={6}>
           {children}
         </Dropdown.Content>
       </Dropdown.Portal>
@@ -52,7 +52,7 @@ export function InfoPopover({ trigger, children }: { trigger: ReactNode; childre
     <Popover.Root>
       <Popover.Trigger asChild>{trigger}</Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content className="z-50 w-72 rounded-md border border-line bg-surface p-3 text-sm" sideOffset={6}>
+        <Popover.Content className="z-50 w-72 rounded-card border border-line bg-surface p-3 text-sm shadow-card" sideOffset={6}>
           {children}
         </Popover.Content>
       </Popover.Portal>
